@@ -36,6 +36,7 @@ from thonny.lsp_types import (
     TextDocumentItem,
     VersionedTextDocumentIdentifier,
 )
+from thonny.config_ui import ConfigurationPage, add_option_checkbox
 from thonny.misc_utils import (
     PLACEHOLDER_URI,
     UNTITLED_URI_SCHEME,
@@ -896,7 +897,15 @@ class EditorNotebook(CustomNotebook):
         get_workbench().set_default("edit.indent_width", 4)
         get_workbench().set_default("edit.tab_width", 4)
         get_workbench().set_default("file.make_saved_shebang_scripts_executable", True)
+        get_workbench().set_default("edit.auto_close_brackets", True)
 
+        get_workbench().add_configuration_page(
+            "editor_auto_close",
+            tr("Auto-close"),
+            _AutoCloseConfigPage,
+            order=25,
+        )
+        
         self._recent_menu = tk.Menu(
             get_workbench().get_menu("file"), postcommand=self._update_recent_menu
         )
@@ -1564,3 +1573,20 @@ def get_target_dir_from_uri(uri: str) -> str:
         return os.path.dirname(uri_to_target_path(uri))
     else:
         return universal_dirname(uri_to_target_path(uri))
+
+class _AutoCloseConfigPage(ConfigurationPage):
+    """Pagina di configurazione per l'auto-chiusura di parentesi e virgolette."""
+
+    def __init__(self, master):
+        super().__init__(master)
+        add_option_checkbox(
+            self,
+            "edit.auto_close_brackets",
+            tr("Auto-close brackets and quotes (VS Code style)"),
+            tooltip=tr(
+                "When enabled, typing (, [, {, \" or ' inserts the closing "
+                "character automatically and places the cursor between them. "
+                "Typing the closing character skips over it. If text is "
+                "selected, the selection is wrapped in the pair."
+            ),
+        )
