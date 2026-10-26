@@ -33,6 +33,32 @@ NON_TEXT_CHARS.remove("\f")
 
 logger = getLogger(__name__)
 
+_AUTO_CLOSE_PAIRS = {"(": ")", "[": "]", "{": "}", '"': '"', "'": "'"}
+_AUTO_CLOSE_KEYSYMS = {
+    "(": "parenleft",
+    ")": "parenright",
+    "[": "bracketleft",
+    "]": "bracketright",
+    "{": "braceleft",
+    "}": "braceright",
+    '"': "quotedbl",
+    "'": "apostrophe",
+}
+
+
+def _count_unescaped_in_line(char: str, line: str) -> int:
+    count = 0
+    i = 0
+    n = len(line)
+    while i < n:
+        if line[i] == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if line[i] == char:
+            count += 1
+        i += 1
+    return count
+
 
 class SyntaxText(EnhancedText):
     def __init__(self, master, indent_width: int = 4, tab_width: int = 4, cnf={}, **kw):
@@ -133,6 +159,10 @@ class CodeViewText(EnhancedTextWithLogging, SyntaxText):
         # Allow binding to events of all CodeView texts
         self.bindtags(self.bindtags() + ("CodeViewText",))
         tktextext.fixwordbreaks(tk._default_root)
+                # Auto-chiusura parentesi e virgolette (stile VS Code)
+        for _keysym in _AUTO_CLOSE_KEYSYMS.values():
+            self.bind("<KeyPress-%s>" % _keysym, self._on_auto_close_keypress, True)
+        
 
     def on_secondary_click(self, event=None):
         super().on_secondary_click(event)
@@ -149,6 +179,70 @@ class CodeViewText(EnhancedTextWithLogging, SyntaxText):
             pass
 
         menu.tk_popup(event.x_root, event.y_root)
+
+    def _on_auto_close_keypress(self, event):
+        """Auto-chiusura parentesi/virgolette stile VS Code."""
+        if not get_workbench().get_option("edit.auto_close_brackets", True):
+            return None
+
+        if self.is_read_only():
+            return None
+
+        char = event.char
+        if not char:
+            return None
+
+        if char not in _AUTO_CLOSE_PAIRS and char not in _AUTO_CLOSE_PAIRS.values():
+            return None
+
+        # 1. Avvolgi la selezione nella coppia
+        if char in _AUTO_CLOSE_PAIRS and self.has_selection():
+            first, last = self.get_selection_indices()
+            if first is None or last is None:
+                return None
+            selected = self.get(first, last)
+            close_char = _AUTO_CLOSE_PAIRS[char]
+            self.edit_separator()
+            self.delete(first, last)
+            self.insert(first, char + selected + close_char)
+            self.mark_set(
+                "insert",
+                "%s + %dc"
+                % (first, len(char) + len(selected) + len(close_char)),
+            )
+            self.see("insert")
+            return "break"
+
+        # 2. Salta il carattere di chiusura già presente
+        if char in _AUTO_CLOSE_PAIRS.values():
+            next_char = self.get("insert", "insert + 1c")
+            if next_char == char:
+                if char in ('"', "'"):
+                    prev_char = self.get("insert - 1c", "insert")
+                    if prev_char == "\\":
+                        return None
+                self.mark_set("insert", "insert + 1c")
+                return "break"
+
+        # 3. Auto-chiudi il carattere di apertura
+        if char in _AUTO_CLOSE_PAIRS:
+            line_before = self.get("insert linestart", "insert")
+            if char in ('"', "'"):
+                # Siamo dentro una stringa dello stesso tipo → lascia inserire
+                if _count_unescaped_in_line(char, line_before) % 2 == 1:
+                    return None
+                # Siamo dentro una stringa dell'altro tipo → non auto-chiudere
+                other = "'" if char == '"' else '"'
+                if _count_unescaped_in_line(other, line_before) % 2 == 1:
+                    return None
+            close_char = _AUTO_CLOSE_PAIRS[char]
+            self.edit_separator()
+            self.insert("insert", char + close_char)
+            self.mark_set("insert", "insert - 1c")
+            self.see("insert")
+            return "break"
+
+        return None
 
 
 class CodeView(tktextext.EnhancedTextFrame):
