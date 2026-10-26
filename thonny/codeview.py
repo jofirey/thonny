@@ -34,16 +34,6 @@ NON_TEXT_CHARS.remove("\f")
 logger = getLogger(__name__)
 
 _AUTO_CLOSE_PAIRS = {"(": ")", "[": "]", "{": "}", '"': '"', "'": "'"}
-_AUTO_CLOSE_KEYSYMS = {
-    "(": "parenleft",
-    ")": "parenright",
-    "[": "bracketleft",
-    "]": "bracketright",
-    "{": "braceleft",
-    "}": "braceright",
-    '"': "quotedbl",
-    "'": "apostrophe",
-}
 
 
 def _count_unescaped_in_line(char: str, line: str) -> int:
@@ -58,6 +48,10 @@ def _count_unescaped_in_line(char: str, line: str) -> int:
             count += 1
         i += 1
     return count
+
+
+def _is_empty_auto_close_pair(open_char: str, close_char: str) -> bool:
+    return open_char in _AUTO_CLOSE_PAIRS and _AUTO_CLOSE_PAIRS[open_char] == close_char
 
 
 def _is_in_string_context(line: str, quote: str) -> bool:
@@ -205,10 +199,24 @@ class CodeViewText(EnhancedTextWithLogging, SyntaxText):
         # Allow binding to events of all CodeView texts
         self.bindtags(self.bindtags() + ("CodeViewText",))
         tktextext.fixwordbreaks(tk._default_root)
-                # Auto-chiusura parentesi e virgolette (stile VS Code)
-        for _keysym in _AUTO_CLOSE_KEYSYMS.values():
-            self.bind("<KeyPress-%s>" % _keysym, self._on_auto_close_keypress, True)
-        
+        self.bind("<KeyPress>", self._on_auto_close_keypress, True)
+
+    def perform_smart_backspace(self, event):
+        if (
+            get_workbench().get_option("edit.auto_close_brackets", True)
+            and not self.has_selection()
+        ):
+            before_cursor = self.get("insert - 1c", "insert")
+            after_cursor = self.get("insert", "insert + 1c")
+            if _is_empty_auto_close_pair(before_cursor, after_cursor):
+                self._log_keypress_for_undo(event)
+                pair_start = self.index("insert - 1c")
+                pair_end = self.index("insert + 1c")
+                self.delete(pair_start, pair_end)
+                self.mark_set("insert", pair_start)
+                return "break"
+
+        return super().perform_smart_backspace(event)
 
     def on_secondary_click(self, event=None):
         super().on_secondary_click(event)
