@@ -60,6 +60,52 @@ def _count_unescaped_in_line(char: str, line: str) -> int:
     return count
 
 
+def _is_in_string_context(line: str, quote: str) -> bool:
+    if quote not in ("'", '"'):
+        return False
+
+    single_quoted = False
+    double_quoted = False
+    triple_single = False
+    triple_double = False
+    i = 0
+    n = len(line)
+
+    while i < n:
+        if line.startswith("'''", i) and not double_quoted and not triple_double:
+            triple_single = not triple_single
+            i += 3
+            continue
+
+        if line.startswith('"""', i) and not single_quoted and not triple_single:
+            triple_double = not triple_double
+            i += 3
+            continue
+
+        if line[i] == "#" and not single_quoted and not double_quoted:
+            break
+
+        if line[i] == "\\" and (single_quoted or double_quoted or triple_single or triple_double):
+            i += 2
+            continue
+
+        if line[i] == "'" and not double_quoted and not triple_double:
+            single_quoted = not single_quoted
+            i += 1
+            continue
+
+        if line[i] == '"' and not single_quoted and not triple_single:
+            double_quoted = not double_quoted
+            i += 1
+            continue
+
+        i += 1
+
+    if quote == "'":
+        return single_quoted or triple_single
+    return double_quoted or triple_double
+
+
 class SyntaxText(EnhancedText):
     def __init__(self, master, indent_width: int = 4, tab_width: int = 4, cnf={}, **kw):
         self.file_type = "python"
@@ -228,12 +274,10 @@ class CodeViewText(EnhancedTextWithLogging, SyntaxText):
         if char in _AUTO_CLOSE_PAIRS:
             line_before = self.get("insert linestart", "insert")
             if char in ('"', "'"):
-                # Siamo dentro una stringa dello stesso tipo → lascia inserire
-                if _count_unescaped_in_line(char, line_before) % 2 == 1:
+                if _is_in_string_context(line_before, char):
                     return None
-                # Siamo dentro una stringa dell'altro tipo → non auto-chiudere
                 other = "'" if char == '"' else '"'
-                if _count_unescaped_in_line(other, line_before) % 2 == 1:
+                if _is_in_string_context(line_before, other):
                     return None
             close_char = _AUTO_CLOSE_PAIRS[char]
             self.edit_separator()
