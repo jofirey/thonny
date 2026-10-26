@@ -34,16 +34,6 @@ NON_TEXT_CHARS.remove("\f")
 logger = getLogger(__name__)
 
 _AUTO_CLOSE_PAIRS = {"(": ")", "[": "]", "{": "}", '"': '"', "'": "'"}
-_AUTO_CLOSE_KEYSYMS = {
-    "(": "parenleft",
-    ")": "parenright",
-    "[": "bracketleft",
-    "]": "bracketright",
-    "{": "braceleft",
-    "}": "braceright",
-    '"': "quotedbl",
-    "'": "apostrophe",
-}
 
 
 def _count_unescaped_in_line(char: str, line: str) -> int:
@@ -58,6 +48,56 @@ def _count_unescaped_in_line(char: str, line: str) -> int:
             count += 1
         i += 1
     return count
+
+
+def _is_empty_auto_close_pair(open_char: str, close_char: str) -> bool:
+    return open_char in _AUTO_CLOSE_PAIRS and _AUTO_CLOSE_PAIRS[open_char] == close_char
+
+
+def _is_in_string_context(line: str, quote: str) -> bool:
+    if quote not in ("'", '"'):
+        return False
+
+    single_quoted = False
+    double_quoted = False
+    triple_single = False
+    triple_double = False
+    i = 0
+    n = len(line)
+
+    while i < n:
+        if line.startswith("'''", i) and not double_quoted and not triple_double:
+            triple_single = not triple_single
+            i += 3
+            continue
+
+        if line.startswith('"""', i) and not single_quoted and not triple_single:
+            triple_double = not triple_double
+            i += 3
+            continue
+
+        if line[i] == "#" and not single_quoted and not double_quoted:
+            break
+
+        if line[i] == "\\" and (single_quoted or double_quoted or triple_single or triple_double):
+            i += 2
+            continue
+
+        if line[i] == "'" and not double_quoted and not triple_double:
+            single_quoted = not single_quoted
+            i += 1
+            continue
+
+        if line[i] == '"' and not single_quoted and not triple_single:
+            double_quoted = not double_quoted
+            i += 1
+            continue
+
+        i += 1
+
+    if quote == "'":
+        return single_quoted or triple_single
+    return double_quoted or triple_double
 
 
 class SyntaxText(EnhancedText):
@@ -159,10 +199,24 @@ class CodeViewText(EnhancedTextWithLogging, SyntaxText):
         # Allow binding to events of all CodeView texts
         self.bindtags(self.bindtags() + ("CodeViewText",))
         tktextext.fixwordbreaks(tk._default_root)
-                # Auto-chiusura parentesi e virgolette (stile VS Code)
-        for _keysym in _AUTO_CLOSE_KEYSYMS.values():
-            self.bind("<KeyPress-%s>" % _keysym, self._on_auto_close_keypress, True)
-        
+        self.bind("<KeyPress>", self._on_auto_close_keypress, True)
+
+    def perform_smart_backspace(self, event):
+        if (
+            get_workbench().get_option("edit.auto_close_brackets", True)
+            and not self.has_selection()
+        ):
+            before_cursor = self.get("insert - 1c", "insert")
+            after_cursor = self.get("insert", "insert + 1c")
+            if _is_empty_auto_close_pair(before_cursor, after_cursor):
+                self._log_keypress_for_undo(event)
+                pair_start = self.index("insert - 1c")
+                pair_end = self.index("insert + 1c")
+                self.delete(pair_start, pair_end)
+                self.mark_set("insert", pair_start)
+                return "break"
+
+        return super().perform_smart_backspace(event)
 
     def on_secondary_click(self, event=None):
         super().on_secondary_click(event)
@@ -228,12 +282,10 @@ class CodeViewText(EnhancedTextWithLogging, SyntaxText):
         if char in _AUTO_CLOSE_PAIRS:
             line_before = self.get("insert linestart", "insert")
             if char in ('"', "'"):
-                # Siamo dentro una stringa dello stesso tipo → lascia inserire
-                if _count_unescaped_in_line(char, line_before) % 2 == 1:
+                if _is_in_string_context(line_before, char):
                     return None
-                # Siamo dentro una stringa dell'altro tipo → non auto-chiudere
                 other = "'" if char == '"' else '"'
-                if _count_unescaped_in_line(other, line_before) % 2 == 1:
+                if _is_in_string_context(line_before, other):
                     return None
             close_char = _AUTO_CLOSE_PAIRS[char]
             self.edit_separator()
